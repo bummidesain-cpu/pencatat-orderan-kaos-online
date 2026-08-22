@@ -1,0 +1,8 @@
+{
+  "name": "Remix Pencatat Orderan Kaos Ver. Online",
+  "description": "Sistem Manajemen Order, Approval Desain, Nota \u0026 Produksi Sablon Konveksi Professional",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

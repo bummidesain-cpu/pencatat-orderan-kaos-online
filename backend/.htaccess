@@ -1,0 +1,24 @@
+# Apache / LiteSpeed Configuration for Order Management REST API
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /backend/
+
+    # Handle Authorization Header
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Prevent direct directory browsing
+    Options -Indexes
+</IfModule>
+
+# Disable PHP error display in production for security
+<IfModule php7_module>
+    php_flag display_errors Off
+    php_value upload_max_filesize 20M
+    php_value post_max_size 25M
+</IfModule>
+<IfModule php_module>
+    php_flag display_errors Off
+    php_value upload_max_filesize 20M
+    php_value post_max_size 25M
+</IfModule>

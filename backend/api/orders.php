@@ -13,88 +13,6 @@ $method = $_SERVER['REQUEST_METHOD'];
 $id = $_GET['id'] ?? null;
 $action = $_GET['action'] ?? null;
 
-// Helper: Ambil order lengkap dengan items dan payments
-function getFullOrder(PDO $pdo, string $orderId): ?array {
-    $stmt = $pdo->prepare("SELECT * FROM orders WHERE id = ? OR order_number = ? LIMIT 1");
-    $stmt->execute([$orderId, $orderId]);
-    $order = $stmt->fetch();
-
-    if (!$order) {
-        return null;
-    }
-
-    // Ambil order items
-    $stmtItems = $pdo->prepare("SELECT * FROM order_items WHERE order_id = ? ORDER BY id ASC");
-    $stmtItems->execute([$order['id']]);
-    $rawItems = $stmtItems->fetchAll();
-
-    $items = array_map(function($item) {
-        return [
-            'id'             => $item['id'],
-            'productName'    => $item['product_name'],
-            'productType'    => $item['product_type'],
-            'serviceType'    => $item['service_type'] ?? 'jahit_sablon',
-            'fabric'         => $item['fabric'],
-            'color'          => $item['color'],
-            'modelCategory'  => $item['model_category'],
-            'quantity'       => (int)$item['quantity'],
-            'unitPrice'      => (float)$item['unit_price'],
-            'subtotal'       => (float)$item['subtotal'],
-            'sizeBreakdown'  => !empty($item['size_breakdown']) ? json_decode($item['size_breakdown'], true) : ['category' => 'Dewasa Pendek', 'sizes' => []],
-            'sablonDetails'  => !empty($item['sablon_details']) ? json_decode($item['sablon_details'], true) : [],
-            'pricingConfig'  => !empty($item['pricing_config']) ? json_decode($item['pricing_config'], true) : null,
-            'notes'          => $item['notes'] ?? ''
-        ];
-    }, $rawItems);
-
-    // Ambil payments
-    $stmtPay = $pdo->prepare("SELECT * FROM payments WHERE order_id = ? ORDER BY payment_date ASC, created_at ASC");
-    $stmtPay->execute([$order['id']]);
-    $rawPayments = $stmtPay->fetchAll();
-
-    $payments = array_map(function($p) {
-        return [
-            'id'         => $p['id'],
-            'date'       => $p['payment_date'],
-            'amount'     => (float)$p['amount'],
-            'method'     => $p['method'],
-            'notes'      => $p['notes'] ?? '',
-            'recordedBy' => $p['recorded_by']
-        ];
-    }, $rawPayments);
-
-    return [
-        'id'               => $order['id'],
-        'orderNumber'      => $order['order_number'],
-        'orderDate'        => $order['order_date'],
-        'deadline'         => $order['deadline'],
-        'customerId'       => $order['customer_id'],
-        'customerName'     => $order['customer_name'],
-        'customerPhone'    => $order['customer_phone'],
-        'organization'     => $order['organization'] ?? '',
-        'salesAdmin'       => $order['sales_admin'],
-        'notes'            => $order['notes'] ?? '',
-        'status'           => $order['status'],
-        'subtotal'         => (float)$order['subtotal'],
-        'additionalCosts'  => [
-            'designFee'   => (float)$order['design_fee'],
-            'sablonFee'   => (float)$order['sablon_fee'],
-            'extraFee'    => (float)$order['extra_fee'],
-            'discount'    => (float)$order['discount'],
-            'shippingFee' => (float)$order['shipping_fee']
-        ],
-        'grandTotal'       => (float)$order['grand_total'],
-        'totalPaid'        => (float)$order['total_paid'],
-        'remainingBalance' => (float)$order['remaining_balance'],
-        'paymentStatus'    => $order['payment_status'],
-        'productionStage'  => $order['production_stage'],
-        'createdAt'        => $order['created_at'],
-        'updatedAt'        => $order['updated_at'],
-        'items'            => $items,
-        'payments'         => $payments
-    ];
-}
-
 // ------------------------------------------------------------------------
 // ROUTE: GET (List Orders atau Single Order)
 // ------------------------------------------------------------------------
@@ -161,12 +79,12 @@ if ($method === 'GET') {
 if ($method === 'POST') {
     $input = getJsonInput();
     
-    // Validasi dasar
+    // Validasi input data
     $orderId         = $input['id'] ?? ('ord-' . time() . '-' . rand(100, 999));
     $orderNumber     = trim($input['orderNumber'] ?? ('ORD-' . date('Ym') . '-' . rand(1000, 9999)));
     $orderDate       = $input['orderDate'] ?? date('Y-m-d');
     $deadline        = $input['deadline'] ?? date('Y-m-d', strtotime('+7 days'));
-    $customerId      = $input['customerId'] ?? 'cust-1';
+    $customerId      = $input['customerId'] ?? ('cust-' . uniqid());
     $customerName    = trim($input['customerName'] ?? 'Pelanggan');
     $customerPhone   = trim($input['customerPhone'] ?? '-');
     $organization    = trim($input['organization'] ?? '');
@@ -207,6 +125,20 @@ if ($method === 'POST') {
 
     try {
         $pdo->beginTransaction();
+
+        // 0. Auto-sync data customer ke tabel customers jika ada
+        if (!empty($customerName) && $customerName !== 'Pelanggan') {
+            $stmtCust = $pdo->prepare("
+                INSERT INTO customers (id, name, organization, phone, created_at, updated_at)
+                VALUES (?, ?, ?, ?, NOW(), NOW())
+                ON DUPLICATE KEY UPDATE
+                    name = VALUES(name),
+                    organization = VALUES(organization),
+                    phone = VALUES(phone),
+                    updated_at = NOW()
+            ");
+            $stmtCust->execute([$customerId, $customerName, $organization, $customerPhone]);
+        }
 
         // 1. Simpan atau Update Header Order
         $stmtOrder = $pdo->prepare("
@@ -321,11 +253,11 @@ if ($method === 'POST') {
         $pdo->commit();
 
         $savedOrder = getFullOrder($pdo, $orderId);
-        sendResponse(true, ['message' => 'Order berhasil disimpan', 'order' => $savedOrder]);
+        sendResponse(true, ['message' => 'Order berhasil disimpan ke database MySQL', 'order' => $savedOrder]);
 
     } catch (Exception $e) {
         $pdo->rollBack();
-        sendResponse(false, 'Gagal menyimpan order: ' . $e->getMessage(), 500);
+        sendResponse(false, 'Gagal menyimpan order ke MySQL: ' . $e->getMessage(), 500);
     }
 }
 
@@ -349,7 +281,7 @@ if ($method === 'DELETE') {
     $stmt = $pdo->prepare("DELETE FROM orders WHERE id = ?");
     $stmt->execute([$id]);
 
-    sendResponse(true, 'Order berhasil dihapus.');
+    sendResponse(true, 'Order berhasil dihapus dari database MySQL.');
 }
 
 sendResponse(false, 'Metode HTTP tidak didukung', 405);

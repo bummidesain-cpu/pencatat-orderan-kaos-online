@@ -1,18 +1,21 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Crown,
+  Database,
   LogOut,
   Menu,
   Monitor,
   Moon,
   PlusCircle,
   Search,
-  ShieldAlert,
   Sun,
   UserCheck,
   Users,
+  Wifi,
+  WifiOff,
   Wrench,
 } from 'lucide-react';
+import { apiClient, ConnectionInfo } from '../lib/apiClient';
 import { User, UserRole } from '../types';
 
 interface NavbarProps {
@@ -25,6 +28,7 @@ interface NavbarProps {
   theme: 'light' | 'dark' | 'system';
   onThemeChange: (theme: 'light' | 'dark' | 'system') => void;
   onOpenUserManagement?: () => void;
+  onOpenDatabaseSync?: () => void;
   onLogout?: () => void;
   businessName?: string;
   logoUrl?: string;
@@ -40,12 +44,24 @@ export const Navbar: React.FC<NavbarProps> = ({
   theme,
   onThemeChange,
   onOpenUserManagement,
+  onOpenDatabaseSync,
   onLogout,
   businessName,
   logoUrl,
 }) => {
   const nameDisplay = businessName || 'Order Management System';
   const initial = nameDisplay.charAt(0).toUpperCase() || 'O';
+
+  const [connection, setConnection] = useState<ConnectionInfo>(apiClient.getConnectionInfo());
+
+  useEffect(() => {
+    const unsub = apiClient.subscribe((info) => {
+      setConnection(info);
+    });
+    return unsub;
+  }, []);
+
+  const isConnected = connection.status === 'connected';
 
   return (
     <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-slate-200 bg-white/95 px-4 sm:px-6 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/95">
@@ -92,6 +108,26 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Right: Quick Actions & Role Switcher */}
       <div className="flex items-center gap-2 sm:gap-3">
+        {/* Database Status Button */}
+        {onOpenDatabaseSync && (
+          <button
+            type="button"
+            onClick={onOpenDatabaseSync}
+            className={`hidden md:inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-bold transition border cursor-pointer ${
+              isConnected
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:border-emerald-900/60 dark:text-emerald-300'
+                : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100 dark:bg-amber-950/40 dark:border-amber-900/60 dark:text-amber-300'
+            }`}
+            title="Klik untuk Kelola Koneksi Database MySQL"
+          >
+            <Database className="h-3.5 w-3.5" />
+            <span className="inline-flex items-center gap-1">
+              <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+              <span className="hidden lg:inline">{isConnected ? 'MySQL Online' : 'Koneksi MySQL'}</span>
+            </span>
+          </button>
+        )}
+
         {/* Quick Order Button (For Admin / Owner) */}
         {currentUser.role !== 'produksi' && (
           <button

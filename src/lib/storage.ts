@@ -16,6 +16,7 @@ import {
   PriceListItem,
   User,
 } from '../types';
+import { apiClient, getActiveBackendUrl, setActiveBackendUrl } from './apiClient';
 
 const STORAGE_KEYS = {
   SETTINGS: 'bummi_settings_v1',
@@ -32,18 +33,16 @@ const STORAGE_KEYS = {
 };
 
 export function getPhpBackendUrl(): string {
-  if (typeof window === 'undefined') return '';
-  return localStorage.getItem(STORAGE_KEYS.PHP_BACKEND_URL) || 'http://localhost/order-api';
+  return getActiveBackendUrl();
 }
 
 export function setPhpBackendUrl(url: string): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_KEYS.PHP_BACKEND_URL, url.trim().replace(/\/+$/, ''));
+  setActiveBackendUrl(url);
 }
 
 export function getBackendMode(): 'local' | 'php_mysql' {
-  if (typeof window === 'undefined') return 'local';
-  return (localStorage.getItem(STORAGE_KEYS.BACKEND_MODE) as 'local' | 'php_mysql') || 'local';
+  if (typeof window === 'undefined') return 'php_mysql';
+  return (localStorage.getItem(STORAGE_KEYS.BACKEND_MODE) as 'local' | 'php_mysql') || 'php_mysql';
 }
 
 export function setBackendMode(mode: 'local' | 'php_mysql'): void {
@@ -55,55 +54,11 @@ export async function testPhpBackendConnection(customUrl?: string): Promise<{
   success: boolean;
   message: string;
   data?: any;
+  latencyMs?: number;
 }> {
-  const baseUrl = (customUrl || getPhpBackendUrl()).trim().replace(/\/+$/, '');
-  if (!baseUrl) {
-    return { success: false, message: 'URL Backend PHP belum ditentukan.' };
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch(`${baseUrl}/api/settings.php`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.success) {
-        return {
-          success: true,
-          message: `Berhasil terhubung ke Backend PHP MySQL! (${data.settings?.name || 'Database OK'})`,
-          data,
-        };
-      }
-      return {
-        success: true,
-        message: 'Endpoint PHP merespon, namun status database perlu diperiksa.',
-        data,
-      };
-    } else {
-      return {
-        success: false,
-        message: `Server merespon dengan status HTTP ${res.status}: ${res.statusText}`,
-      };
-    }
-  } catch (err: any) {
-    if (err.name === 'AbortError') {
-      return {
-        success: false,
-        message: 'Koneksi timeout (lebih dari 6 detik). Pastikan web server Apache/PHP dan MySQL aktif.',
-      };
-    }
-    return {
-      success: false,
-      message: `Gagal terhubung: ${err?.message || 'Pastikan XAMPP/Laragon/cPanel aktif dan CORS diizinkan.'}`,
-    };
-  }
+  return apiClient.testConnection(customUrl);
 }
+
 
 
 // Initialize default storage if empty
@@ -169,7 +124,7 @@ export function getBusinessSettings(): BusinessSettings {
 
 export function saveBusinessSettings(settings: BusinessSettings): void {
   localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-  syncWithBackend('settings', settings);
+  apiClient.saveSettings(settings).catch(() => {});
 }
 
 // Users
@@ -329,13 +284,13 @@ export function saveCustomer(customer: Customer): void {
     customers.unshift(customer);
   }
   localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
-  syncWithBackend('customers', customers);
+  apiClient.saveCustomer(customer).catch(() => {});
 }
 
 export function deleteCustomer(id: string): void {
   const customers = getCustomers().filter((c) => c.id !== id);
   localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
-  syncWithBackend('customers', customers);
+  apiClient.deleteCustomer(id).catch(() => {});
 }
 
 // Orders
@@ -358,7 +313,6 @@ export function getOrderById(id: string): Order | undefined {
   return getOrders().find((o) => o.id === id);
 }
 
-
 export function saveOrder(order: Order): void {
   const orders = getOrders();
   const index = orders.findIndex((o) => o.id === order.id);
@@ -368,20 +322,23 @@ export function saveOrder(order: Order): void {
     orders.unshift({ ...order, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   }
   localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
-  syncWithBackend('orders', orders);
+  
+  // Persist directly to MySQL backend
+  apiClient.saveOrder(order).catch((err) => {
+    console.warn('Sync order to MySQL backend delayed:', err);
+  });
 }
 
 export function deleteOrder(id: string): void {
   const orders = getOrders().filter((o) => o.id !== id);
   localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
-  syncWithBackend('orders', orders);
+  apiClient.deleteOrder(id).catch(() => {});
 }
 
 export function deleteAllOrders(): void {
   localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify([]));
-  syncWithBackend('orders', []);
   localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify([]));
-  syncWithBackend('expenses', []);
+  apiClient.deleteAllOrders().catch(() => {});
 }
 
 // Expenses
@@ -404,13 +361,13 @@ export function saveExpense(expense: Expense): void {
     expenses.unshift(expense);
   }
   localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses));
-  syncWithBackend('expenses', expenses);
+  apiClient.saveExpense(expense).catch(() => {});
 }
 
 export function deleteExpense(id: string): void {
   const expenses = getExpenses().filter((e) => e.id !== id);
   localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses));
-  syncWithBackend('expenses', expenses);
+  apiClient.deleteExpense(id).catch(() => {});
 }
 
 // Activity Logs
@@ -437,32 +394,59 @@ export function addActivityLog(log: Omit<ActivityLog, 'id' | 'timestamp'>): void
   localStorage.setItem(STORAGE_KEYS.ACTIVITY_LOGS, JSON.stringify(logs));
 }
 
-// Background sync helper with Express server backend
-async function syncWithBackend(resource: string, data: unknown): Promise<void> {
+// Restore state from backend API on initial boot if available
+export async function syncFromBackend(): Promise<{
+  success: boolean;
+  message?: string;
+  orderCount?: number;
+}> {
   try {
-    await fetch(`/api/${resource}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-  } catch {
-    // Client offline or local-only fallback
+    const data = await apiClient.fetchFullStateFromBackend();
+    if (data.success) {
+      if (data.settings) localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(data.settings));
+      if (data.customers && data.customers.length > 0) {
+        localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(data.customers));
+      }
+      if (data.orders && data.orders.length > 0) {
+        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(data.orders));
+      }
+      if (data.expenses && data.expenses.length > 0) {
+        localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(data.expenses));
+      }
+      if (data.priceList && data.priceList.length > 0) {
+        localStorage.setItem(STORAGE_KEYS.PRICE_LIST, JSON.stringify(data.priceList));
+      }
+      return {
+        success: true,
+        message: 'Data berhasil disinkronkan dari database MySQL!',
+        orderCount: data.orders?.length || 0,
+      };
+    }
+    return { success: false, message: 'Gagal mengambil data dari database MySQL.' };
+  } catch (err: any) {
+    return { success: false, message: err?.message || 'Gagal koneksi ke server.' };
   }
 }
 
-// Restore state from backend API on initial boot if available
-export async function syncFromBackend(): Promise<void> {
-  try {
-    const res = await fetch('/api/state');
-    if (res.ok) {
-      const data = await res.json();
-      if (data.settings) localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(data.settings));
-      if (data.customers) localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(data.customers));
-      if (data.orders) localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(data.orders));
-    }
-  } catch {
-    // Fail silently, use localStorage
-  }
+// Push all local data into MySQL database
+export async function pushAllToBackend(): Promise<{
+  success: boolean;
+  message: string;
+  savedCount?: number;
+}> {
+  const settings = getBusinessSettings();
+  const customers = getCustomers();
+  const orders = getOrders();
+  const expenses = getExpenses();
+  const priceList = getPriceList();
+
+  return apiClient.pushFullStateToBackend({
+    settings,
+    customers,
+    orders,
+    expenses,
+    priceList,
+  });
 }
 
 // Backup & Restore Database Helpers
@@ -598,17 +582,17 @@ export async function importDatabaseBackup(backupData: any): Promise<{
 
   if (settings) {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-    await syncWithBackend('settings', settings);
+    apiClient.saveSettings(settings).catch(() => {});
   }
 
   if (Array.isArray(customers)) {
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
-    await syncWithBackend('customers', customers);
+    customers.forEach((c) => apiClient.saveCustomer(c).catch(() => {}));
   }
 
   if (Array.isArray(orders)) {
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
-    await syncWithBackend('orders', orders);
+    orders.forEach((o) => apiClient.saveOrder(o).catch(() => {}));
   }
 
   if (Array.isArray(users)) {
@@ -638,9 +622,14 @@ export async function resetDatabaseToDefault(): Promise<void> {
   localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(initialOrders));
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(initialUsers));
 
-  await syncWithBackend('settings', initialBusinessSettings);
-  await syncWithBackend('customers', initialCustomers);
-  await syncWithBackend('orders', initialOrders);
+  apiClient.saveSettings(initialBusinessSettings).catch(() => {});
+  apiClient.pushFullStateToBackend({
+    settings: initialBusinessSettings,
+    customers: initialCustomers,
+    orders: initialOrders,
+    expenses: initialExpenses,
+    priceList: initialPriceList,
+  }).catch(() => {});
 
   addActivityLog({
     orderId: '-',
@@ -664,6 +653,7 @@ export function getPriceList(): PriceListItem[] {
 
 export function savePriceList(items: PriceListItem[]): void {
   localStorage.setItem(STORAGE_KEYS.PRICE_LIST, JSON.stringify(items));
+  apiClient.savePriceList(items).catch(() => {});
 }
 
 export function addPriceListItem(newItem: Omit<PriceListItem, 'id' | 'updatedAt'>): PriceListItem {

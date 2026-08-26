@@ -63,15 +63,101 @@ function sendResponse(bool $success, $dataOrMessage = null, int $statusCode = 20
     http_response_code($statusCode);
     if ($success) {
         if (is_array($dataOrMessage)) {
-            echo json_encode(array_merge(['success' => true], $dataOrMessage), JSON_UNESCAPED_UNICODE);
+            echo json_encode(array_merge(['success' => true, 'database' => DB_NAME], $dataOrMessage), JSON_UNESCAPED_UNICODE);
         } else {
-            echo json_encode(['success' => true, 'message' => $dataOrMessage], JSON_UNESCAPED_UNICODE);
+            echo json_encode(['success' => true, 'database' => DB_NAME, 'message' => $dataOrMessage], JSON_UNESCAPED_UNICODE);
         }
     } else {
         echo json_encode([
             'success' => false,
+            'database'=> DB_NAME,
             'error'   => is_string($dataOrMessage) ? $dataOrMessage : 'Terjadi kesalahan pada server'
         ], JSON_UNESCAPED_UNICODE);
     }
     exit;
 }
+
+// Helper global: Ambil order lengkap beserta order_items dan payments
+if (!function_exists('getFullOrder')) {
+    function getFullOrder(PDO $pdo, string $orderId): ?array {
+        $stmt = $pdo->prepare("SELECT * FROM orders WHERE id = ? OR order_number = ? LIMIT 1");
+        $stmt->execute([$orderId, $orderId]);
+        $order = $stmt->fetch();
+
+        if (!$order) {
+            return null;
+        }
+
+        // Ambil order items
+        $stmtItems = $pdo->prepare("SELECT * FROM order_items WHERE order_id = ? ORDER BY id ASC");
+        $stmtItems->execute([$order['id']]);
+        $rawItems = $stmtItems->fetchAll();
+
+        $items = array_map(function($item) {
+            return [
+                'id'             => $item['id'],
+                'productName'    => $item['product_name'],
+                'productType'    => $item['product_type'],
+                'serviceType'    => $item['service_type'] ?? 'jahit_sablon',
+                'fabric'         => $item['fabric'],
+                'color'          => $item['color'],
+                'modelCategory'  => $item['model_category'],
+                'quantity'       => (int)$item['quantity'],
+                'unitPrice'      => (float)$item['unit_price'],
+                'subtotal'       => (float)$item['subtotal'],
+                'sizeBreakdown'  => !empty($item['size_breakdown']) ? json_decode($item['size_breakdown'], true) : ['category' => 'Dewasa Pendek', 'sizes' => []],
+                'sablonDetails'  => !empty($item['sablon_details']) ? json_decode($item['sablon_details'], true) : [],
+                'pricingConfig'  => !empty($item['pricing_config']) ? json_decode($item['pricing_config'], true) : null,
+                'notes'          => $item['notes'] ?? ''
+            ];
+        }, $rawItems);
+
+        // Ambil payments
+        $stmtPay = $pdo->prepare("SELECT * FROM payments WHERE order_id = ? ORDER BY payment_date ASC, created_at ASC");
+        $stmtPay->execute([$order['id']]);
+        $rawPayments = $stmtPay->fetchAll();
+
+        $payments = array_map(function($p) {
+            return [
+                'id'         => $p['id'],
+                'date'       => $p['payment_date'],
+                'amount'     => (float)$p['amount'],
+                'method'     => $p['method'],
+                'notes'      => $p['notes'] ?? '',
+                'recordedBy' => $p['recorded_by']
+            ];
+        }, $rawPayments);
+
+        return [
+            'id'               => $order['id'],
+            'orderNumber'      => $order['order_number'],
+            'orderDate'        => $order['order_date'],
+            'deadline'         => $order['deadline'],
+            'customerId'       => $order['customer_id'],
+            'customerName'     => $order['customer_name'],
+            'customerPhone'    => $order['customer_phone'],
+            'organization'     => $order['organization'] ?? '',
+            'salesAdmin'       => $order['sales_admin'],
+            'notes'            => $order['notes'] ?? '',
+            'status'           => $order['status'],
+            'subtotal'         => (float)$order['subtotal'],
+            'additionalCosts'  => [
+                'designFee'   => (float)$order['design_fee'],
+                'sablonFee'   => (float)$order['sablon_fee'],
+                'extraFee'    => (float)$order['extra_fee'],
+                'discount'    => (float)$order['discount'],
+                'shippingFee' => (float)$order['shipping_fee']
+            ],
+            'grandTotal'       => (float)$order['grand_total'],
+            'totalPaid'        => (float)$order['total_paid'],
+            'remainingBalance' => (float)$order['remaining_balance'],
+            'paymentStatus'    => $order['payment_status'],
+            'productionStage'  => $order['production_stage'],
+            'createdAt'        => $order['created_at'],
+            'updatedAt'        => $order['updated_at'],
+            'items'            => $items,
+            'payments'         => $payments
+        ];
+    }
+}
+

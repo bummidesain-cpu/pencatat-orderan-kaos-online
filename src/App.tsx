@@ -16,6 +16,7 @@ import { SettingsView } from './components/settings/SettingsView';
 import { UserManagementModal } from './components/settings/UserManagementModal';
 import { NavTab, Sidebar } from './components/Sidebar';
 import { WhatsAppModal } from './components/WhatsAppModal';
+import { DatabaseSyncModal } from './components/DatabaseSyncModal';
 import { BackupReminderBanner } from './components/BackupReminderBanner';
 import {
   addPriceListItem,
@@ -108,6 +109,7 @@ export default function App() {
   } | null>(null);
   const [isOwnerPasswordModalOpen, setIsOwnerPasswordModalOpen] = useState(false);
   const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState(false);
+  const [isDatabaseSyncModalOpen, setIsDatabaseSyncModalOpen] = useState(false);
 
 
   // Theme State ('light' | 'dark' | 'system')
@@ -233,6 +235,8 @@ export default function App() {
     setSettingsState(getBusinessSettings());
     setCustomersState(getCustomers());
     setOrdersState(getOrders());
+    setExpensesState(getExpenses());
+    setPriceListState(getPriceList());
     setSelectedOrder(null);
   };
 
@@ -328,6 +332,7 @@ export default function App() {
         theme={theme}
         onThemeChange={handleThemeChange}
         onOpenUserManagement={() => setIsUserManagementModalOpen(true)}
+        onOpenDatabaseSync={() => setIsDatabaseSyncModalOpen(true)}
         onLogout={handleLogout}
         businessName={settings.name}
         logoUrl={settings.logoUrl}
@@ -476,6 +481,7 @@ export default function App() {
                   isLicensed={isLicensed}
                   onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
                   onOpenUserManagement={() => setIsUserManagementModalOpen(true)}
+                  onOpenDatabaseSync={() => setIsDatabaseSyncModalOpen(true)}
                   theme={theme}
                   onThemeChange={handleThemeChange}
                 />
@@ -484,6 +490,14 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {isDatabaseSyncModalOpen && (
+        <DatabaseSyncModal
+          isOpen={isDatabaseSyncModalOpen}
+          onClose={() => setIsDatabaseSyncModalOpen(false)}
+          onDataRefreshed={handleRefreshAllData}
+        />
+      )}
 
       {isNewOrderModalOpen && (
         <OrderFormModal
